@@ -42,6 +42,13 @@ export default function AppLayout() {
         }}
       />
       <Tabs.Screen
+        name="place-order"
+        options={{
+          title: "Place Order",
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>📝</Text>,
+        }}
+      />
+      <Tabs.Screen
         name="admin/index"
         options={{
           title: "Admin",
