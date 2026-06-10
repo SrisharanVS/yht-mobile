@@ -1,8 +1,9 @@
 // apps/mobile/app/(app)/place-order.tsx
 // Place Order screen — allows vendors to place orders directly from the KDS.
 // Fetches active dishes from the Admin menu cache and submits to the API.
+// Supports item-level selection of Dine In / Takeaway, splitting into separate orders on submission.
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -14,27 +15,30 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuthStore } from "../../src/store/authStore";
 import { useMenuStore } from "../../src/store/menuStore";
 import { useOrdersStore } from "../../src/store/ordersStore";
 import { acceptOrder } from "../../src/lib/orderService";
 import { router } from "expo-router";
 
-function getDishDetails(dishName: string, type: "DINING" | "TAKEAWAY") {
+interface CartItem {
+  dining: number;
+  takeaway: number;
+}
+
+function getDishDetails(dishName: string) {
   const match = dishName.match(/^([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])\s*(.*)$/);
   if (match) {
     return { emoji: match[1], cleanName: match[2] };
   }
-  return { emoji: type === "DINING" ? "🍽️" : "📦", cleanName: dishName };
+  return { emoji: "🍛", cleanName: dishName };
 }
 
 export default function PlaceOrderScreen() {
   const { token, webApiUrl } = useAuthStore();
   const { dishes, categories, loadFromDb, syncFromApi } = useMenuStore();
   const [selectedCategory, setSelectedCategory] = useState("all");
-  const [cart, setCart] = useState<Record<string, number>>({});
-  const [orderType, setOrderType] = useState<"DINING" | "TAKEAWAY">("DINING");
+  const [cart, setCart] = useState<Record<string, CartItem>>({});
   const [notes, setNotes] = useState("");
   const [placing, setPlacing] = useState(false);
 
@@ -50,27 +54,46 @@ export default function PlaceOrderScreen() {
     ? activeDishes
     : activeDishes.filter((d) => d.categoryId === selectedCategory);
 
-  const totalItems = Object.values(cart).reduce((sum, qty) => sum + qty, 0);
+  const totalItems = Object.values(cart).reduce(
+    (sum, item) => sum + item.dining + item.takeaway,
+    0
+  );
 
-  const totalPrice = Object.entries(cart).reduce((sum, [dishId, qty]) => {
+  const totalPrice = Object.entries(cart).reduce((sum, [dishId, item]) => {
     const dish = dishes.find((d) => d.id === dishId);
-    return sum + (dish ? Number(dish.price) * qty : 0);
+    if (!dish) return sum;
+    const itemPrice = Number(dish.price);
+    return sum + itemPrice * (item.dining + item.takeaway);
   }, 0);
 
-  const addToCart = (dishId: string) => {
-    setCart((prev) => ({
-      ...prev,
-      [dishId]: (prev[dishId] ?? 0) + 1,
-    }));
+  const addToCart = (dishId: string, type: "dining" | "takeaway") => {
+    setCart((prev) => {
+      const current = prev[dishId] ?? { dining: 0, takeaway: 0 };
+      return {
+        ...prev,
+        [dishId]: {
+          ...current,
+          [type]: current[type] + 1,
+        },
+      };
+    });
   };
 
-  const removeFromCart = (dishId: string) => {
+  const removeFromCart = (dishId: string, type: "dining" | "takeaway") => {
     setCart((prev) => {
+      const current = prev[dishId];
+      if (!current) return prev;
       const copy = { ...prev };
-      if (copy[dishId] <= 1) {
+      const newQty = Math.max(0, current[type] - 1);
+      const updated = {
+        ...current,
+        [type]: newQty,
+      };
+
+      if (updated.dining === 0 && updated.takeaway === 0) {
         delete copy[dishId];
       } else {
-        copy[dishId] -= 1;
+        copy[dishId] = updated;
       }
       return copy;
     });
@@ -86,60 +109,88 @@ export default function PlaceOrderScreen() {
     setPlacing(true);
 
     try {
-      const orderItems = Object.entries(cart).map(([dishId, quantity]) => ({
-        dishId,
-        quantity,
-      }));
+      const diningItems = Object.entries(cart)
+        .filter(([_, item]) => item.dining > 0)
+        .map(([dishId, item]) => ({ dishId, quantity: item.dining }));
 
-      // Generate unique device ID for vendor to bypass customer limits
-      const vendorDeviceId = `vendor-pos-${Date.now()}`;
+      const takeawayItems = Object.entries(cart)
+        .filter(([_, item]) => item.takeaway > 0)
+        .map(([dishId, item]) => ({ dishId, quantity: item.takeaway }));
 
-      const res = await fetch(`${webApiUrl}/api/orders`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          deviceId: vendorDeviceId,
-          type: orderType,
-          notes: notes.trim() || null,
-          items: orderItems,
-        }),
-      });
+      const baseDeviceId = `vendor-pos-${Date.now()}`;
+      const placedOrders: string[] = [];
 
-      const data = await res.json();
+      // 1. Submit Dine In Order if there are items
+      if (diningItems.length > 0) {
+        const res = await fetch(`${webApiUrl}/api/orders`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            deviceId: baseDeviceId,
+            type: "DINING",
+            notes: notes.trim() || null,
+            items: diningItems,
+          }),
+        });
 
-      if (!data.success) {
-        Alert.alert("Error", data.error || "Failed to place order");
-        return;
+        const data = await res.json();
+        if (data.success) {
+          const orderData = data.data;
+          useOrdersStore.getState().addOrder(orderData);
+          await acceptOrder(Number(orderData.orderNumber));
+          placedOrders.push(`#${orderData.orderNumber} (Dine In)`);
+        } else {
+          Alert.alert("Error", data.error || "Failed to place Dine In order");
+          setPlacing(false);
+          return;
+        }
       }
 
-      const orderData = data.data;
+      // 2. Submit Takeaway Order if there are items
+      if (takeawayItems.length > 0) {
+        const res = await fetch(`${webApiUrl}/api/orders`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            deviceId: `${baseDeviceId}-takeaway`,
+            type: "TAKEAWAY",
+            notes: notes.trim() || null,
+            items: takeawayItems,
+          }),
+        });
 
-      // 1. Manually add to ordersStore (writes to SQLite)
-      useOrdersStore.getState().addOrder(orderData);
+        const data = await res.json();
+        if (data.success) {
+          const orderData = data.data;
+          useOrdersStore.getState().addOrder(orderData);
+          await acceptOrder(Number(orderData.orderNumber));
+          placedOrders.push(`#${orderData.orderNumber} (Takeaway)`);
+        } else {
+          Alert.alert("Error", data.error || "Failed to place Takeaway order");
+          setPlacing(false);
+          return;
+        }
+      }
 
-      // 2. Accept order immediately in the KDS
-      const acceptedOrder = await acceptOrder(Number(orderData.orderNumber));
-
-      if (acceptedOrder) {
-        Alert.alert(
-          "Success",
-          `Order #${orderData.orderNumber} placed & accepted successfully!`,
-          [
-            {
-              text: "OK",
-              onPress: () => {
-                clearCart();
-                router.push("/dashboard");
-              },
+      Alert.alert(
+        "Success",
+        `Placed & accepted orders:\n${placedOrders.join("\n")}`,
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              clearCart();
+              router.push("/dashboard");
             },
-          ]
-        );
-      } else {
-        Alert.alert("Warning", "Order placed on server but could not be accepted locally.");
-      }
+          },
+        ]
+      );
     } catch (err) {
       console.error("[place-order] Submit failed:", err);
       Alert.alert("Error", "Network or server error placing order.");
@@ -163,7 +214,7 @@ export default function PlaceOrderScreen() {
         )}
       </View>
 
-      {/* Categories Horizontal Selector */}
+      {/* Categories Selector */}
       <View style={styles.categoryRowContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryRow}>
           <TouchableOpacity
@@ -188,9 +239,8 @@ export default function PlaceOrderScreen() {
         </ScrollView>
       </View>
 
-      {/* Main content split */}
+      {/* Main layout */}
       <View style={styles.mainLayout}>
-        {/* Dishes list */}
         <ScrollView style={styles.dishesList} contentContainerStyle={styles.dishesContent}>
           {filteredDishes.length === 0 ? (
             <View style={styles.emptyContainer}>
@@ -199,17 +249,11 @@ export default function PlaceOrderScreen() {
             </View>
           ) : (
             filteredDishes.map((dish) => {
-              const qty = cart[dish.id] ?? 0;
-              const { emoji, cleanName } = getDishDetails(dish.name, "DINING");
-              const unavailable =
-                (orderType === "DINING" && !dish.diningAvailable) ||
-                (orderType === "TAKEAWAY" && !dish.takeawayAvailable);
+              const item = cart[dish.id] ?? { dining: 0, takeaway: 0 };
+              const { emoji, cleanName } = getDishDetails(dish.name);
 
               return (
-                <View
-                  key={dish.id}
-                  style={[styles.dishCard, unavailable && styles.dishCardUnavailable]}
-                >
+                <View key={dish.id} style={styles.dishCard}>
                   <View style={styles.dishInfo}>
                     <View style={styles.dishTitleRow}>
                       <Text style={styles.dishEmoji}>{emoji}</Text>
@@ -218,32 +262,73 @@ export default function PlaceOrderScreen() {
                     <Text style={styles.dishPrice}>₹{dish.price}</Text>
                   </View>
 
-                  {unavailable ? (
-                    <Text style={styles.unavailableLabel}>Unavailable</Text>
-                  ) : qty === 0 ? (
-                    <TouchableOpacity
-                      style={styles.addButton}
-                      onPress={() => addToCart(dish.id)}
-                    >
-                      <Text style={styles.addButtonText}>+ Add</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <View style={styles.qtyContainer}>
-                      <TouchableOpacity
-                        style={styles.qtyBtn}
-                        onPress={() => removeFromCart(dish.id)}
-                      >
-                        <Text style={styles.qtyBtnText}>−</Text>
-                      </TouchableOpacity>
-                      <Text style={styles.qtyText}>{qty}</Text>
-                      <TouchableOpacity
-                        style={styles.qtyBtn}
-                        onPress={() => addToCart(dish.id)}
-                      >
-                        <Text style={styles.qtyBtnText}>+</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
+                  <View style={styles.controlsSection}>
+                    {/* Dine In Controls */}
+                    {dish.diningAvailable && (
+                      <View style={styles.controlRow}>
+                        <Text style={styles.controlTypeLabel}>🍽️ Dine</Text>
+                        {item.dining === 0 ? (
+                          <TouchableOpacity
+                            style={styles.smallAddBtn}
+                            onPress={() => addToCart(dish.id, "dining")}
+                          >
+                            <Text style={styles.smallAddBtnText}>+ Add</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <View style={styles.qtyContainer}>
+                            <TouchableOpacity
+                              style={styles.qtyBtn}
+                              onPress={() => removeFromCart(dish.id, "dining")}
+                            >
+                              <Text style={styles.qtyBtnText}>−</Text>
+                            </TouchableOpacity>
+                            <Text style={styles.qtyText}>{item.dining}</Text>
+                            <TouchableOpacity
+                              style={styles.qtyBtn}
+                              onPress={() => addToCart(dish.id, "dining")}
+                            >
+                              <Text style={styles.qtyBtnText}>+</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                      </View>
+                    )}
+
+                    {/* Takeaway Controls */}
+                    {dish.takeawayAvailable && (
+                      <View style={[styles.controlRow, dish.diningAvailable && { marginTop: 8 }]}>
+                        <Text style={styles.controlTypeLabel}>📦 Take</Text>
+                        {item.takeaway === 0 ? (
+                          <TouchableOpacity
+                            style={styles.smallAddBtn}
+                            onPress={() => addToCart(dish.id, "takeaway")}
+                          >
+                            <Text style={styles.smallAddBtnText}>+ Add</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <View style={styles.qtyContainer}>
+                            <TouchableOpacity
+                              style={styles.qtyBtn}
+                              onPress={() => removeFromCart(dish.id, "takeaway")}
+                            >
+                              <Text style={styles.qtyBtnText}>−</Text>
+                            </TouchableOpacity>
+                            <Text style={styles.qtyText}>{item.takeaway}</Text>
+                            <TouchableOpacity
+                              style={styles.qtyBtn}
+                              onPress={() => addToCart(dish.id, "takeaway")}
+                            >
+                              <Text style={styles.qtyBtnText}>+</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                      </View>
+                    )}
+
+                    {!dish.diningAvailable && !dish.takeawayAvailable && (
+                      <Text style={styles.unavailableLabel}>Unavailable</Text>
+                    )}
+                  </View>
                 </View>
               );
             })
@@ -253,26 +338,6 @@ export default function PlaceOrderScreen() {
         {/* Sticky footer checkout panel */}
         {totalItems > 0 && (
           <View style={styles.checkoutPanel}>
-            {/* Order type toggle */}
-            <View style={styles.typeToggleRow}>
-              <TouchableOpacity
-                style={[styles.typeBtn, orderType === "DINING" && styles.typeBtnActive]}
-                onPress={() => setOrderType("DINING")}
-              >
-                <Text style={[styles.typeBtnText, orderType === "DINING" && styles.typeBtnTextActive]}>
-                  🍽️ Dine In
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.typeBtn, orderType === "TAKEAWAY" && styles.typeBtnActive]}
-                onPress={() => setOrderType("TAKEAWAY")}
-              >
-                <Text style={[styles.typeBtnText, orderType === "TAKEAWAY" && styles.typeBtnTextActive]}>
-                  📦 Takeaway
-                </Text>
-              </TouchableOpacity>
-            </View>
-
             {/* Notes */}
             <TextInput
               style={styles.notesInput}
@@ -370,36 +435,54 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#1d242c",
   },
-  dishCardUnavailable: { opacity: 0.4 },
   dishInfo: { flex: 1, marginRight: 16 },
   dishTitleRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
   dishEmoji: { fontSize: 16 },
   dishName: { fontSize: 15, fontWeight: "600", color: "#e2e8f0" },
   dishPrice: { fontSize: 14, fontWeight: "700", color: "#f97316" },
 
-  addButton: {
+  controlsSection: {
+    flexDirection: "column",
+    alignItems: "flex-end",
+    minWidth: 150,
+  },
+  controlRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+  },
+  controlTypeLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#8fa0b0",
+    marginRight: 8,
+  },
+  smallAddBtn: {
     backgroundColor: "rgba(249,115,22,0.1)",
     borderWidth: 1,
     borderColor: "#f97316",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    minWidth: 64,
+    alignItems: "center",
   },
-  addButtonText: { color: "#f97316", fontSize: 13, fontWeight: "700" },
+  smallAddBtnText: { color: "#f97316", fontSize: 11, fontWeight: "700" },
 
-  qtyContainer: { flexDirection: "row", alignItems: "center", gap: 12 },
+  qtyContainer: { flexDirection: "row", alignItems: "center", gap: 6 },
   qtyBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 6,
     backgroundColor: "#1b2229",
     borderWidth: 1,
     borderColor: "#2c3945",
     justifyContent: "center",
     alignItems: "center",
   },
-  qtyBtnText: { color: "#e2e8f0", fontSize: 16, fontWeight: "700" },
-  qtyText: { fontSize: 15, fontWeight: "800", color: "#f97316", minWidth: 16, textAlign: "center" },
+  qtyBtnText: { color: "#e2e8f0", fontSize: 14, fontWeight: "700" },
+  qtyText: { fontSize: 14, fontWeight: "800", color: "#f97316", minWidth: 14, textAlign: "center" },
 
   unavailableLabel: { fontSize: 12, color: "#ef4444", fontWeight: "600" },
 
@@ -410,20 +493,6 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
-  typeToggleRow: { flexDirection: "row", gap: 8 },
-  typeBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: "#1b2229",
-    borderWidth: 1,
-    borderColor: "#2c3945",
-    alignItems: "center",
-  },
-  typeBtnActive: { backgroundColor: "rgba(249,115,22,0.1)", borderColor: "#f97316" },
-  typeBtnText: { fontSize: 13, fontWeight: "600", color: "#8fa0b0" },
-  typeBtnTextActive: { color: "#f97316" },
-
   notesInput: {
     backgroundColor: "#1b2229",
     borderRadius: 10,
