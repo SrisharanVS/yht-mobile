@@ -20,6 +20,7 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { useAuthStore } from "../../src/store/authStore";
+import { login as apiLogin } from "../../src/services/api";
 import { initAbly } from "../../src/lib/ably";
 import { useMenuStore } from "../../src/store/menuStore";
 import { useOrdersStore } from "../../src/store/ordersStore";
@@ -30,39 +31,25 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const { login, webApiUrl } = useAuthStore();
+  const { login } = useAuthStore();
 
   async function handleLogin() {
     if (!username.trim() || !password.trim()) return;
     setLoading(true);
 
     try {
-      const res = await fetch(`${webApiUrl}/api/auth`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password }),
-      });
-
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await res.text();
-        throw new Error(
-          `Server returned non-JSON response (status ${res.status}): ${text.slice(0, 150)}`
-        );
-      }
-
-      const data = await res.json();
+      const { ok, status, data } = await apiLogin(username.trim(), password);
 
       // ── 403: subscription inactive ─────────────────────────────────────────
       // This is intentionally distinct from 401 — the user exists but their
       // restaurant's subscription is not active. Never show "invalid credentials".
-      if (res.status === 403 && data.error === "subscription_inactive") {
+      if (status === 403 && data.error === "subscription_inactive") {
         router.replace("/(auth)/suspended");
         return;
       }
 
       // ── 401 or other errors ────────────────────────────────────────────────
-      if (!res.ok || !data.success) {
+      if (!ok || !data.success) {
         Alert.alert("Login Failed", data.error || "Invalid credentials");
         return;
       }
@@ -97,6 +84,15 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
+      {/* Settings Floating Button */}
+      <TouchableOpacity
+        style={styles.settingsFloatingButton}
+        onPress={() => router.push("/(auth)/settings")}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.settingsButtonIcon}>⚙️</Text>
+      </TouchableOpacity>
+
       {/* Background glow orbs */}
       <View style={styles.glow1} />
       <View style={styles.glow2} />
@@ -268,5 +264,22 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "700",
+  },
+  settingsFloatingButton: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 60 : 40,
+    right: 24,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#111111",
+    borderWidth: 1,
+    borderColor: "#2a2a2a",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+  },
+  settingsButtonIcon: {
+    fontSize: 20,
   },
 });

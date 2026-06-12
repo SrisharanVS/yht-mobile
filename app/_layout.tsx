@@ -16,15 +16,19 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { runMigrations } from "../src/db/migrations";
 import { useAuthStore } from "../src/store/authStore";
-import { checkSession } from "../src/lib/api";
+import { checkSession } from "../src/services/api";
+import { initializeConfig } from "../src/services/config";
 import { View, ActivityIndicator } from "react-native";
 
 export default function RootLayout() {
   const [dbReady, setDbReady] = useState(false);
-  const { loadFromStorage, logout, login, token, user, webApiUrl } = useAuthStore();
+  const { loadFromStorage, logout, login } = useAuthStore();
 
   useEffect(() => {
     async function init() {
+      // ── 0. Initialize configuration from AsyncStorage ───────────────────
+      await initializeConfig();
+
       // ── 1. Run DB migrations (idempotent) ────────────────────────────────
       runMigrations();
 
@@ -54,7 +58,7 @@ export default function RootLayout() {
       }
 
       // Call the server to verify token and subscription status
-      const { status, error, data } = await checkSession(webApiUrl, currentToken);
+      const { status, error, data } = await checkSession(currentToken);
 
       if (status === 0) {
         // Network error — allow through with the cached token (offline tolerance)

@@ -15,7 +15,7 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useAuthStore } from "../../src/store/authStore";
+import { apiConfig } from "../../src/services/api";
 import { useMenuStore } from "../../src/store/menuStore";
 import { useOrdersStore } from "../../src/store/ordersStore";
 import { acceptOrder } from "../../src/lib/orderService";
@@ -35,7 +35,6 @@ function getDishDetails(dishName: string) {
 }
 
 export default function PlaceOrderScreen() {
-  const { token, webApiUrl } = useAuthStore();
   const { dishes, categories, loadFromDb, syncFromApi } = useMenuStore();
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [cart, setCart] = useState<Record<string, CartItem>>({});
@@ -122,60 +121,28 @@ export default function PlaceOrderScreen() {
 
       // 1. Submit Dine In Order if there are items
       if (diningItems.length > 0) {
-        const res = await fetch(`${webApiUrl}/api/orders`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            deviceId: baseDeviceId,
-            type: "DINING",
-            notes: notes.trim() || null,
-            items: diningItems,
-          }),
+        const orderData = await apiConfig.post<any>("/api/orders", {
+          deviceId: baseDeviceId,
+          type: "DINING",
+          notes: notes.trim() || null,
+          items: diningItems,
         });
-
-        const data = await res.json();
-        if (data.success) {
-          const orderData = data.data;
-          useOrdersStore.getState().addOrder(orderData);
-          await acceptOrder(Number(orderData.orderNumber));
-          placedOrders.push(`#${orderData.orderNumber} (Dine In)`);
-        } else {
-          Alert.alert("Error", data.error || "Failed to place Dine In order");
-          setPlacing(false);
-          return;
-        }
+        useOrdersStore.getState().addOrder(orderData);
+        await acceptOrder(Number(orderData.orderNumber));
+        placedOrders.push(`#${orderData.orderNumber} (Dine In)`);
       }
 
       // 2. Submit Takeaway Order if there are items
       if (takeawayItems.length > 0) {
-        const res = await fetch(`${webApiUrl}/api/orders`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            deviceId: `${baseDeviceId}-takeaway`,
-            type: "TAKEAWAY",
-            notes: notes.trim() || null,
-            items: takeawayItems,
-          }),
+        const orderData = await apiConfig.post<any>("/api/orders", {
+          deviceId: `${baseDeviceId}-takeaway`,
+          type: "TAKEAWAY",
+          notes: notes.trim() || null,
+          items: takeawayItems,
         });
-
-        const data = await res.json();
-        if (data.success) {
-          const orderData = data.data;
-          useOrdersStore.getState().addOrder(orderData);
-          await acceptOrder(Number(orderData.orderNumber));
-          placedOrders.push(`#${orderData.orderNumber} (Takeaway)`);
-        } else {
-          Alert.alert("Error", data.error || "Failed to place Takeaway order");
-          setPlacing(false);
-          return;
-        }
+        useOrdersStore.getState().addOrder(orderData);
+        await acceptOrder(Number(orderData.orderNumber));
+        placedOrders.push(`#${orderData.orderNumber} (Takeaway)`);
       }
 
       Alert.alert(
@@ -438,13 +405,13 @@ const styles = StyleSheet.create({
   dishInfo: { flex: 1, marginRight: 16 },
   dishTitleRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
   dishEmoji: { fontSize: 16 },
-  dishName: { fontSize: 15, fontWeight: "600", color: "#e2e8f0" },
+  dishName: { fontSize: 15, fontWeight: "600", color: "#e2e8f0", flex: 1, flexWrap: "wrap" },
   dishPrice: { fontSize: 14, fontWeight: "700", color: "#f97316" },
 
   controlsSection: {
     flexDirection: "column",
     alignItems: "flex-end",
-    minWidth: 150,
+    width: 140,
   },
   controlRow: {
     flexDirection: "row",

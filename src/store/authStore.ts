@@ -21,14 +21,12 @@ interface AuthState {
   user: AuthUser | null;
   restaurant: Restaurant | null;
   isAuthenticated: boolean;
-  webApiUrl: string;
 
   // Actions
   login: (token: string, user: AuthUser, restaurant: Restaurant) => Promise<void>;
   logout: () => Promise<void>;
   /** Load persisted token from SecureStore. Does NOT validate with server — call checkSession() for that. */
   loadFromStorage: () => Promise<void>;
-  setWebApiUrl: (url: string) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -36,7 +34,6 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   restaurant: null,
   isAuthenticated: false,
-  webApiUrl: process.env.EXPO_PUBLIC_WEB_API_URL ?? "http://localhost:3000",
 
   login: async (token, user, restaurant) => {
     await SecureStore.setItemAsync(TOKEN_KEY, token);
@@ -68,6 +65,4 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ token: null, user: null, restaurant: null, isAuthenticated: false });
     }
   },
-
-  setWebApiUrl: (url) => set({ webApiUrl: url }),
 }));

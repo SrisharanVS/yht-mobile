@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import type { Category, Dish } from "@yht/shared";
 import { getCategories, getMenuItems, syncMenuFromApi } from "../db/menu";
-import { api } from "../lib/api";
+import { api } from "../services/api";
 
 interface MenuState {
   categories: Category[];

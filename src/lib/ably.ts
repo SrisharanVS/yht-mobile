@@ -15,6 +15,7 @@ import {
 import { useAuthStore } from "../store/authStore";
 import { useOrdersStore } from "../store/ordersStore";
 import { useMenuStore } from "../store/menuStore";
+import { getBackendUrl } from "../services/config";
 
 let client: Ably.Realtime | null = null;
 let ordersChannel: Ably.RealtimeChannel | null = null;
@@ -25,16 +26,17 @@ let menuChannel: Ably.RealtimeChannel | null = null;
  * Called once after successful login.
  */
 export async function initAbly(): Promise<void> {
-  const { token, user, webApiUrl } = useAuthStore.getState();
+  const { token, user } = useAuthStore.getState();
   if (!token || !user) throw new Error("Not authenticated");
 
   // Disconnect existing connection if any
   await disconnectAbly();
 
   const clientId = `vendor-${user.username}`;
+  const baseUrl = getBackendUrl();
 
   client = new Ably.Realtime({
-    authUrl: `${webApiUrl}/api/ably-token?clientId=${encodeURIComponent(clientId)}`,
+    authUrl: `${baseUrl}/api/ably-token?clientId=${encodeURIComponent(clientId)}`,
     authHeaders: { Authorization: `Bearer ${token}` },
     authMethod: "GET",
     clientId,

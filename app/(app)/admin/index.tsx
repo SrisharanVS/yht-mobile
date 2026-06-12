@@ -18,52 +18,40 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuthStore } from "../../../src/store/authStore";
 import { useMenuStore } from "../../../src/store/menuStore";
+import { apiConfig } from "../../../src/services/api";
 import { publishMenuUpdated } from "../../../src/lib/ably";
 import type { Category, Dish } from "@yht/shared";
 
 // ── Category Manager ───────────────────────────────────────────────────────────
 
 function CategoryManager() {
-  const { token, webApiUrl } = useAuthStore();
   const { categories, syncFromApi } = useMenuStore();
   const [newName, setNewName] = useState("");
   const [adding, setAdding] = useState(false);
-
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
 
   async function addCategory() {
     if (!newName.trim()) return;
     setAdding(true);
     try {
-      const res = await fetch(`${webApiUrl}/api/categories`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ name: newName.trim(), sortOrder: categories.length }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setNewName("");
-        await syncFromApi();
-        await publishMenuUpdated();
-      } else {
-        Alert.alert("Error", data.error);
-      }
+      await apiConfig.post("/api/categories", { name: newName.trim(), sortOrder: categories.length });
+      setNewName("");
+      await syncFromApi();
+      await publishMenuUpdated();
+    } catch (err) {
+      Alert.alert("Error", err instanceof Error ? err.message : "Failed to add category");
     } finally {
       setAdding(false);
     }
   }
 
   async function toggleCategory(cat: Category) {
-    await fetch(`${webApiUrl}/api/categories/${cat.id}`, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ active: !cat.active }),
-    });
-    await syncFromApi();
-    await publishMenuUpdated();
+    try {
+      await apiConfig.put(`/api/categories/${cat.id}`, { active: !cat.active });
+      await syncFromApi();
+      await publishMenuUpdated();
+    } catch (err) {
+      Alert.alert("Error", err instanceof Error ? err.message : "Failed to toggle category");
+    }
   }
 
   return (
@@ -115,7 +103,6 @@ function DishFormModal({
   onClose: () => void;
   onSave: () => void;
 }) {
-  const { token, webApiUrl } = useAuthStore();
   const { categories } = useMenuStore();
   const isEdit = !!dish;
 
@@ -145,30 +132,21 @@ function DishFormModal({
         active,
       };
 
-      const headers = {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      };
+      const path = isEdit
+        ? `/api/menu/${dish!.id}`
+        : `/api/menu`;
 
-      const url = isEdit
-        ? `${webApiUrl}/api/menu/${dish!.id}`
-        : `${webApiUrl}/api/menu`;
-
-      const res = await fetch(url, {
-        method: isEdit ? "PUT" : "POST",
-        headers,
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json();
-      if (!data.success) {
-        Alert.alert("Error", data.error);
-        return;
+      if (isEdit) {
+        await apiConfig.put(path, body);
+      } else {
+        await apiConfig.post(path, body);
       }
 
       await syncFromApi();
       await publishMenuUpdated();
       onSave();
+    } catch (err) {
+      Alert.alert("Error", err instanceof Error ? err.message : "Failed to save dish");
     } finally {
       setSaving(false);
     }
@@ -275,25 +253,19 @@ function DishFormModal({
 // ── Dish Manager ───────────────────────────────────────────────────────────────
 
 function DishManager() {
-  const { token, webApiUrl } = useAuthStore();
   const { dishes, categories, syncFromApi } = useMenuStore();
   const [showForm, setShowForm] = useState(false);
   const [editingDish, setEditingDish] = useState<Dish | null>(null);
   const [filterCat, setFilterCat] = useState("all");
 
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-
   async function toggleDish(dish: Dish) {
-    await fetch(`${webApiUrl}/api/menu/${dish.id}`, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ active: !dish.active }),
-    });
-    await syncFromApi();
-    await publishMenuUpdated();
+    try {
+      await apiConfig.put(`/api/menu/${dish.id}`, { active: !dish.active });
+      await syncFromApi();
+      await publishMenuUpdated();
+    } catch (err) {
+      Alert.alert("Error", err instanceof Error ? err.message : "Failed to toggle dish");
+    }
   }
 
   const filtered = filterCat === "all" ? dishes : dishes.filter((d) => d.categoryId === filterCat);

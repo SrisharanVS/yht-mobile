@@ -5,7 +5,7 @@
 
 import { useOrdersStore } from "../store/ordersStore";
 import { publishOrderEvent } from "./ably";
-import { api } from "./api";
+import { api } from "../services/api";
 import type { LocalOrder } from "@yht/shared";
 import { getUncompletedItemsForDish } from "../db/orders";
 
