@@ -37,6 +37,12 @@
     "experiments": {
       "typedRoutes": true,
       "autolinkingModuleResolution": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "0a19624c-d189-4be7-ae0f-5dbe4cf13f32"
+      }
     }
   }
 }
